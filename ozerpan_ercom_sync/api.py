@@ -2,6 +2,7 @@ import re
 
 # import phpserialize
 import frappe
+
 from ozerpan_ercom_sync.utils import get_mysql_connection
 
 
@@ -19,7 +20,8 @@ def sync_items() -> dict[str, str]:
     """
     LIMIT: int = 20
     connection = get_mysql_connection()
-    cursor = connection.cursor(dictionary=True)
+    # cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor()
     query: str = f"SELECT * FROM dbpoz ORDER BY PozID DESC LIMIT {LIMIT}"
     cursor.execute(query)
     data = cursor.fetchall()
@@ -115,7 +117,7 @@ def sync_users() -> dict[str, str]:
         dict: Message indicating sync status
     """
     connection = get_mysql_connection()
-    cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor()
     query: str = "SELECT * FROM dbcari"
     cursor.execute(query)
     data: list[dict] = cursor.fetchall()
@@ -123,6 +125,8 @@ def sync_users() -> dict[str, str]:
     if not data:
         return {"message": "No data found"}
 
+    for key, value in data[0].items():
+        print(f"{key}: {value}")
     create_users(data)
     # frappe.throw("Some Error")
 
@@ -167,7 +171,8 @@ def create_customer(data: dict) -> dict[str, str]:
     c = frappe.new_doc("Customer")
     c.customer_name = str(data["ADI"])
     c.customer_type = "Company"
-    c.custom_group_for_ercom_db = str(data["GRUP"])
+    if data.get("GRUP"):
+        c.custom_group_for_ercom_db = str(data["GRUP"])
     c.custom_current_code = str(data["KOD"])
     c.customer_details = str(data["NOTLAR"])
     c.custom_tax_office = str(data["VDAIRESI"])
@@ -195,7 +200,8 @@ def create_address(data: dict, customer: str) -> dict[str, str]:
     a.city = str(data["SEHIR"] or "Bilinmiyor")
     a.country = "Turkey"
     a.pincode = str(data["POSTAKODU"])
-    a.email_id = str(data["EMAIL"])
+    if data.get("EMAIL"):
+        a.email_id = str(data.get("EMAIL"))
     a.phone = str(data["TELEFON1"])
     a.fax = str(data["FAKS"])
     a.append("links", {"link_doctype": "Customer", "link_name": customer})
