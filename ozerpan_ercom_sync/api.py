@@ -1,5 +1,7 @@
+import logging
 import os
 import re
+from datetime import datetime
 
 import frappe
 import pandas as pd
@@ -8,74 +10,185 @@ from ozerpan_ercom_sync.utils import get_mysql_connection
 
 
 @frappe.whitelist()
+@frappe.whitelist()
 def update_bom(file_url):
-    file_doc = frappe.get_doc("File", {"file_url": file_url})
-    print(f"\n\n\nFile:{file_doc}\n\n\n")
+    """Updates Bill of Materials (BOM) from an uploaded Excel file.
 
-    file_path = frappe.get_site_path(
-        "private" if file_doc.is_private else "public",
-        "files",
-        os.path.basename(file_url),
+    Sets up logging, processes the Excel file to update BOM details, and handles any errors.
+
+    Args:
+        file_url (str): URL path to the uploaded Excel file
+
+    Returns:
+        dict: Status dictionary containing:
+            - status (str): "Success" if completed successfully
+            - message (str): Empty string if successful, error message if failed
+            - log_file (str): Path to the generated log file
+
+    Raises:
+        Exception: If file is not found or other errors occur during processing
+
+    Example:
+        result = update_bom("/files/bom_update.xlsx")
+        if result["status"] == "Success":
+            # BOM updated successfully
+    """
+    # Setup logging
+    log_dir = os.path.join(frappe.get_site_path(), "logs", "bom_updates")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(
+        log_dir, f'bom_update_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
     )
 
-    if not os.path.exists(file_path):
-        frappe.throw(f"File not found: {file_path}")
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
 
-    data = process_excel(file_path)
+    logger = logging.getLogger(__name__)
 
-    return {"status": "Success", "message": ""}
+    try:
+        logger.info(f"Starting BOM update process for file: {file_url}")
+        file_doc = frappe.get_doc("File", {"file_url": file_url})
+
+        file_path = frappe.get_site_path(
+            "private" if file_doc.is_private else "public",
+            "files",
+            os.path.basename(file_url),
+        )
+
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            frappe.throw(f"File not found: {file_path}")
+
+        process_excel(file_path, logger)
+        logger.info("BOM update completed successfully")
+        return {"status": "Success", "message": "", "log_file": log_file}
+
+    except Exception as e:
+        logger.error(f"Error during BOM update: {str(e)}")
+        raise
 
 
-def process_excel(file_path):
+def process_excel(file_path, logger):
+    """Processes Excel file to update BOM information.
+
+    Reads Excel file sheets, extracts BOM details and raw materials, and updates
+    corresponding BOM records in the system.
+
+    Args:
+        file_path (str): Path to the Excel file to process
+        logger (logging.Logger): Logger instance for logging operations
+
+    Raises:
+        Exception: If BOM does not exist for an item code
+
+    Example:
+        logger = logging.getLogger(__name__)
+        process_excel("path/to/excel.xlsx", logger)
+    """
     ef = pd.ExcelFile(file_path)
     sheets = ef.sheet_names
+    logger.info(f"Processing Excel file with {len(sheets)} sheets")
+
+    dtype_dict = {"Stok Kodu": str, "Toplam Fiyat": str}
+
     for sheet in sheets:
-        df = pd.read_excel(file_path, sheet)
+        logger.info(f"Processing sheet: {sheet}")
+        df = pd.read_excel(file_path, sheet, dtype=dtype_dict)
         if df.empty:
-            print(f"Sheet '{sheet}' is empty. Skipping...")
+            logger.warning(f"Empty sheet found: {sheet}")
             continue
-        tail = df.tail(3)
-        item_code = f"{tail['Stok Kodu'].values[0]}-{tail['Stok Kodu'].values[1]}"
+
+        tail = df.tail(3).copy()
+        item_code = f"{tail['Stok Kodu'].iloc[0]}-{tail['Stok Kodu'].iloc[1]}"
+        logger.info(f"Processing item code: {item_code}")
+
         if not frappe.db.exists("BOM", {"item": item_code}):
+            logger.error(f"BOM not found for item: {item_code}")
             frappe.throw(f"BOM for the Item ({item_code}) does not exist.")
+
         bom_doc = frappe.get_doc("BOM", {"item": item_code})
-        filtered_df = df[df["Stok Kodu"].astype(str).str.startswith("#")]
-        update_bom_raw_materials(bom_doc, filtered_df)
-        update_bom_item_valuation_rate(item_code, tail["Toplam Fiyat"].values[0])
+
+        filtered_df = df[df["Stok Kodu"].str.startswith("#", na=False)].copy()
+        logger.info(f"Found {len(filtered_df)} raw materials for BOM")
+
+        update_bom_raw_materials(bom_doc, filtered_df, logger)
+        update_bom_item_valuation_rate(item_code, tail["Toplam Fiyat"].iloc[0], logger)
 
 
-def update_bom_item_valuation_rate(item_code, total_amount):
+def update_bom_item_valuation_rate(item_code, total_amount, logger):
+    """Updates the valuation rate for an item in the BOM.
+
+    Updates the valuation rate of an existing item in the Bill of Materials (BOM)
+    with a new total amount value.
+
+    Args:
+        item_code (str): Code identifying the item to update
+        total_amount (str): New total amount/valuation rate to set
+        logger (logging.Logger): Logger instance for logging operations
+
+    Raises:
+        frappe.DoesNotExistError: If item with given item_code does not exist
+
+    Example:
+        logger = logging.getLogger(__name__)
+        update_bom_item_valuation_rate("ITEM-001", "1000.00", logger)
+    """
+    logger.info(f"Updating valuation rate for item: {item_code}")
     if not frappe.db.exists("Item", {"item_code": item_code}):
+        logger.error(f"Item not found: {item_code}")
         frappe.throw(f"Item ({item_code}) does not exist")
+
     item = frappe.get_doc("Item", {"item_code": item_code})
-    print(f"Item: {item.name}")
-    print(f"Valuation Rate Before: {item.valuation_rate}")
     item.valuation_rate = get_float_value(total_amount)
-    # item.db_set("valuation_rate", total_amount)
     item.save(ignore_permissions=True)
-    print(f"Valuation Rate After: {item.valuation_rate}\n")
+    logger.info(f"Updated valuation rate to {item.valuation_rate}")
 
 
-def update_bom_raw_materials(doc: "frappe.Document", df: pd.DataFrame) -> None:
-    bom_doc = None
+def update_bom_raw_materials(doc: "frappe.Document", df: pd.DataFrame, logger) -> None:
+    """Updates raw materials in a Bill of Materials document.
+
+    Cancels submitted BOM if needed, processes raw materials from DataFrame,
+    calculates quantities and rates, and submits updated BOM.
+
+    Args:
+        doc (frappe.Document): BOM document to update
+        df (pd.DataFrame): DataFrame containing raw material details
+        logger (logging.Logger): Logger instance for logging operations
+
+    Returns:
+        None
+
+    Raises:
+        frappe.ValidationError: If BOM update fails
+
+    Example:
+        bom_doc = frappe.get_doc("BOM", "BOM-0001")
+        materials_df = pd.DataFrame(...)
+        logger = logging.getLogger(__name__)
+        update_bom_raw_materials(bom_doc, materials_df, logger)
+    """
+    logger.info(f"Updating BOM raw materials for {doc.name}")
     if doc.docstatus.is_submitted():
+        logger.info("Cancelling submitted BOM")
         doc.cancel()
         bom_doc = frappe.copy_doc(doc)
         bom_doc.amended_from = doc.name
-    elif doc.docstatus.is_draft():
+    else:
         bom_doc = doc
 
-    bom_doc.set("items", [])
+    items_data = []
     for _, row in df.iterrows():
-        stock_code: str = str(row["Stok Kodu"]).lstrip("#")
-        item: dict = create_or_update_raw_material_item(stock_code, row)
+        stock_code = row["Stok Kodu"].lstrip("#")
+        logger.info(f"Processing raw material: {stock_code}")
+        item = create_or_update_raw_material_item(stock_code, row, logger)
         rate = float(item.get("valuation_rate", 0.0))
         amount = get_float_value(str(row.get("Toplam Fiyat", "0.0")))
-
-        print(f"Amount: {amount} | Rate: {rate==0.0}")
         qty = round((amount / rate), 7) if rate != 0.0 else 0.0000000
-        bom_doc.append(
-            "items",
+
+        items_data.append(
             {
                 "item_code": str(item.get("item_code")),
                 "item_name": str(item.get("item_name")),
@@ -84,130 +197,135 @@ def update_bom_raw_materials(doc: "frappe.Document", df: pd.DataFrame) -> None:
                 "stock_uom": str(item.get("stock_uom")),
                 "qty": qty,
                 "rate": rate,
-            },
+            }
         )
+
+    bom_doc.set("items", items_data)
     bom_doc.save(ignore_permissions=True)
     bom_doc.submit()
+    logger.info(f"BOM {bom_doc.name} updated and submitted successfully")
 
 
 def create_or_update_raw_material_item(
-    stock_code: str, data: pd.Series
+    stock_code: str, data: pd.Series, logger
 ) -> "frappe.Document":
-    """
-    Creates a new raw material item in Frappe or updates existing one.
+    """Creates or updates a raw material item in the system.
+
+    Takes a stock code and associated data and either creates a new raw material item
+    or updates an existing one with the provided information.
 
     Args:
-        stock_code (str): Stock code for the item, will be prefixed with "erc-"
-        data (pd.Series): Pandas Series containing item data from Excel sheet with columns:
-            - Stok Kodu: Stock code starting with #
-            - Açıklama: Item description in Turkish
-            - Birim: Unit of measure (adet, mtül, m², kg, litre, kutu, tane)
-            - Birim Fiyat: Unit price in TL (e.g. "10,50 TL")
-            - Birim Kg.: Weight per unit as decimal (e.g. "1,5")
+        stock_code (str): The stock code identifier for the raw material
+        data (pd.Series): Series containing item data with keys:
+            - Açıklama: Item description
+            - Birim: Unit of measure
+            - Birim Fiyat: Unit price
+            - Birim Kg.: Weight per unit
+        logger (logging.Logger): Logger instance for logging operations
 
     Returns:
-        frappe.Document: The created or updated Item document with fields:
-            - item_code: "erc-" + stock code
-            - item_name: Description from Excel
-            - description: Same as item_name
-            - item_group: "Raw Material"
-            - stock_uom: Mapped unit (Adet, Mtul, Square Meter, Kilogram, etc)
-            - valuation_rate: Price as float
-            - weight_per_unit: Weight as float
+        frappe.Document: The created or updated Item document
+
+    Raises:
+        frappe.ValidationError: If item creation/update fails
 
     Example:
-        >>> stock_code = "1234"
-        >>> data = pd.Series({
-        ...     "Stok Kodu": "#1234",
-        ...     "Açıklama": "Test Ürün",
-        ...     "Birim": "adet",
-        ...     "Birim Fiyat": "10,50 TL",
-        ...     "Birim Kg.": "1,5"
-        ... })
-        >>> item = create_or_update_raw_material_item(stock_code, data)
-        >>> print(item.item_code)
-        'erc-1234'
-        >>> print(item.stock_uom)
-        'Adet'
+        data = pd.Series({
+            'Açıklama': 'Steel Bar',
+            'Birim': 'kg',
+            'Birim Fiyat': '100.00',
+            'Birim Kg.': '1.5'
+        })
+        item = create_or_update_raw_material_item('1234', data, logger)
     """
     item_code = f"erc-{stock_code}"
-    existing_item = frappe.db.exists("Item", {"item_code": item_code})
-    if existing_item:
-        item = frappe.get_doc("Item", existing_item)
+    logger.info(f"Creating/Updating raw material item: {item_code}")
+
+    description = str(data.get("Açıklama", ""))
+    stock_uom = get_uom(str(data.get("Birim", "")))
+
+    if frappe.db.exists("Item", {"item_code": item_code}):
+        logger.info(f"Updating existing item: {item_code}")
+        item = frappe.get_doc("Item", {"item_code": item_code})
     else:
+        logger.info(f"Creating new item: {item_code}")
         item = frappe.new_doc("Item")
-    item.item_code = item_code
-    item.item_name = str(data.get("Açıklama", ""))
-    item.description = str(data.get("Açıklama", ""))
-    item.item_group = "Raw Material"
-    item.stock_uom = get_uom(str(data.get("Birim", "")))
+        item.item_code = item_code
+        item.item_group = "Raw Material"
+
+    item.item_name = description
+    item.description = description
+    item.stock_uom = stock_uom
     item.valuation_rate = get_float_value(str(data.get("Birim Fiyat", "0.0")))
     item.weight_per_unit = get_float_value(str(data.get("Birim Kg.", "0.0")))
+
     item.save(ignore_permissions=True)
-    print(f"Raw Material Item created/updated: {item.name}")
     return item
 
 
 def get_float_value(value: str) -> float:
-    """
-    Converts a Turkish currency/number string to a float value.
+    """Converts a string value to float by cleaning currency symbols and standardizing decimal format.
+
+    Converts a string containing a number (potentially with currency symbol 'tl') to a float value
+    by removing the currency symbol, standardizing decimal separator, and converting to float.
 
     Args:
-        value (str): String value to convert, e.g. "10,50 TL" or "1.234,56"
+        value (str): String value to convert, may contain 'tl' currency symbol and number
 
     Returns:
-        float: Converted numeric value
+        float: Cleaned and converted float value
 
-    Examples:
-        >>> get_float_value("10,50 TL")
-        10.50
+    Example:
+        >>> get_float_value("123,45 tl")
+        123.45
         >>> get_float_value("1.234,56")
         1234.56
     """
-    cleaned_value = value.lower().replace("tl", "").strip()
-    cleaned_value = cleaned_value.replace(".", "").replace(",", ".")
+    cleaned_value = (
+        value.lower().replace("tl", "").strip().replace(".", "").replace(",", ".")
+    )
     return float(cleaned_value)
 
 
 def get_uom(unit: str) -> str:
-    """
-    Converts a unit string to the corresponding standardized UOM (Unit of Measure).
+    """Gets or creates a Unit of Measure (UOM) record.
+
+    Takes a unit string, maps it to a standardized UOM name using UOM_MAP,
+    and either returns existing UOM or creates new one.
 
     Args:
-        unit (str): The input unit string to convert
+        unit (str): Unit string to convert to standard UOM
 
     Returns:
-        str: The standardized UOM string. Default is "Unit" if no match found.
-            "Mtul" for "mtül"
-            "Nos" for "adet"
-            "Square Meter" for "m²"
+        str: Name of existing or newly created UOM record
+
+    Example:
+        >>> get_uom("kg")
+        "Kilogram"
+        >>> get_uom("mtül")
+        "Mtul"
     """
-    uom: str = "Other"
-    match str(unit).lower():
-        case "mtül":
-            uom = "Mtul"
-        case "adet":
-            uom = "Adet"
-        case "m²":
-            uom = "Square Meter"
-        case "kg":
-            uom = "Kilogram"
-        case "litre":
-            uom = "Litre"
-        case "kutu":
-            uom = "Box"
-        case "tane":
-            uom = "Tane"
-    exists = frappe.db.exists("UOM", uom)
-    if exists:
+    UOM_MAP = {
+        "mtül": "Mtul",
+        "adet": "Adet",
+        "m²": "Square Meter",
+        "kg": "Kilogram",
+        "litre": "Litre",
+        "kutu": "Box",
+        "tane": "Tane",
+    }
+
+    unit_lower = str(unit).lower()
+    uom = UOM_MAP.get(unit_lower, "Other")
+
+    if frappe.db.exists("UOM", uom):
         return uom
-    else:
-        new_uom = frappe.new_doc("UOM")
-        new_uom.uom_name = uom
-        new_uom.enabled = 1
-        new_uom.save(ignore_permissions=True)
-        print(f"New UOM created: {new_uom.name}")
-        return new_uom.name
+
+    new_uom = frappe.new_doc("UOM")
+    new_uom.uom_name = uom
+    new_uom.enabled = 1
+    new_uom.save(ignore_permissions=True)
+    return new_uom.name
 
 
 #########################################################
