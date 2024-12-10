@@ -10,7 +10,6 @@ from ozerpan_ercom_sync.utils import get_mysql_connection
 
 
 @frappe.whitelist()
-@frappe.whitelist()
 def update_bom(file_url):
     """Updates Bill of Materials (BOM) from an uploaded Excel file.
 
@@ -92,6 +91,36 @@ def process_excel(file_path, logger):
     sheets = ef.sheet_names
     logger.info(f"Processing Excel file with {len(sheets)} sheets")
 
+    order_no = pd.read_excel(file_path).tail(3)["Stok Kodu"].iloc[0]
+
+    connection = get_mysql_connection()
+    cursor = connection.cursor()
+    query: str = f"SELECT * FROM dbsiparis WHERE SIPARISNO = '{order_no}'"
+    cursor.execute(query)
+    orders = cursor.fetchall()
+    order = orders[0] if orders else {}  # Take first order or empty dict if none
+    cursor.close()
+    connection.close()
+
+    so = frappe.new_doc("Sales Order")
+    so.customer = order.get("CARIUNVAN")
+    so.date = order.get("SIPTARIHI")
+    so.delivery_date = order.get("SEVKTARIHI")
+    so.company = frappe.defaults.get_user_default("company")
+    so.order_type = "Sales"
+    tax_account = get_tax_account()
+    for key, value in tax_account.as_dict().items():
+        print(f"{key}:{value}")
+    so.append(
+        "taxes",
+        {
+            "charge_type": "On Net Total",
+            "account_head": tax_account.get("name"),
+            "rate": tax_account.get("tax_rate"),
+            "description": tax_account.get("name"),
+        },
+    )
+
     dtype_dict = {"Stok Kodu": str, "Toplam Fiyat": str}
 
     for sheet in sheets:
@@ -115,7 +144,48 @@ def process_excel(file_path, logger):
         logger.info(f"Found {len(filtered_df)} raw materials for BOM")
 
         update_bom_raw_materials(bom_doc, filtered_df, logger)
-        update_bom_item_valuation_rate(item_code, tail["Toplam Fiyat"].iloc[0], logger)
+        item = update_bom_item_valuation_rate(
+            item_code, tail["Toplam Fiyat"].iloc[0], logger
+        )
+        so.append(
+            "items",
+            {
+                "item_code": item.item_code,
+                "delivery_date": so.get("delivery_date"),
+                "item_name": item.item_name,
+                "description": item.description if item.description else item.name,
+                "item_group": item.item_group,
+                "qty": float(item.custom_quantity),
+                "uom": item.stock_uom,
+                "conversion_factor": 1,
+                "rate": item.valuation_rate,
+            },
+        )
+    so.save(ignore_permissions=True)
+    so.submit()
+
+
+def get_tax_account():
+    if not frappe.db.exists(
+        "Account", {"account_name": "ERCOM HESAPLANAN KDV 20", "account_number": "391.99"}
+    ):
+        print("Account doesnt exist")
+        company = frappe.get_doc("Company", frappe.defaults.get_user_default("company"))
+        ta = frappe.new_doc("Account")
+        ta.account_name = "ERCOM HESAPLANAN KDV 20"
+        ta.account_number = "391.99"
+        ta.parent_account = f"391 - HESAPLANAN KDV - {company.abbr}"
+        ta.currency = "TRY"
+        ta.account_type = "Tax"
+        ta.tax_rate = 20
+        ta.save(ignore_permissions=True)
+        return ta
+    else:
+        print("Account does exist")
+        return frappe.get_doc(
+            "Account",
+            {"account_name": "ERCOM HESAPLANAN KDV 20", "account_number": "391.99"},
+        )
 
 
 def update_bom_item_valuation_rate(item_code, total_amount, logger):
@@ -145,6 +215,7 @@ def update_bom_item_valuation_rate(item_code, total_amount, logger):
     item.valuation_rate = get_float_value(total_amount)
     item.save(ignore_permissions=True)
     logger.info(f"Updated valuation rate to {item.valuation_rate}")
+    return item
 
 
 def update_bom_raw_materials(doc: "frappe.Document", df: pd.DataFrame, logger) -> None:
@@ -341,7 +412,7 @@ def sync_items() -> dict[str, str]:
     Returns:
         dict: Message indicating sync status
     """
-    LIMIT: int = 100
+    LIMIT: int = 300
     connection = get_mysql_connection()
     cursor = connection.cursor()
     query: str = f"SELECT * FROM dbpoz ORDER BY PozID DESC LIMIT {LIMIT}"
@@ -380,7 +451,7 @@ def create_item(row: dict) -> dict[str, str]:
     i.item_code = custom_code
     i.item_name = custom_code
     i.item_group = "Products"
-    i.stock_uom = "Meter"
+    i.stock_uom = "Unit"
     i.valuation_rate = row.get("TUTAR")
     i.description = row.get("ACIKLAMA")
     i.custom_serial = row.get("SERI")
