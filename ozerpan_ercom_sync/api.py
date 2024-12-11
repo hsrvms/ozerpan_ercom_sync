@@ -103,14 +103,26 @@ def process_excel(file_path, logger):
     connection.close()
 
     so = frappe.new_doc("Sales Order")
+    if frappe.db.exists("Sales Order", {"custom_ercom_order_no": order_no}):
+        existing_so = frappe.get_doc("Sales Order", {"custom_ercom_order_no": order_no})
+        if existing_so.docstatus.is_submitted():
+            logger.info("Cancelling submitted Sales Order")
+            existing_so.cancel()
+            so = frappe.new_doc("Sales Order")
+        elif existing_so.docstatus.is_draft():
+            so = existing_so
+            so.items = []
+            so.taxes = []
+        elif existing_so.docstatus.is_cancelled():
+            so = frappe.new_doc("Sales Order")
+
     so.customer = order.get("CARIUNVAN")
     so.date = order.get("SIPTARIHI")
     so.delivery_date = order.get("SEVKTARIHI")
     so.company = frappe.defaults.get_user_default("company")
     so.order_type = "Sales"
+    so.custom_ercom_order_no = order_no
     tax_account = get_tax_account()
-    for key, value in tax_account.as_dict().items():
-        print(f"{key}:{value}")
     so.append(
         "taxes",
         {
@@ -169,7 +181,6 @@ def get_tax_account():
     if not frappe.db.exists(
         "Account", {"account_name": "ERCOM HESAPLANAN KDV 20", "account_number": "391.99"}
     ):
-        print("Account doesnt exist")
         company = frappe.get_doc("Company", frappe.defaults.get_user_default("company"))
         ta = frappe.new_doc("Account")
         ta.account_name = "ERCOM HESAPLANAN KDV 20"
@@ -181,7 +192,6 @@ def get_tax_account():
         ta.save(ignore_permissions=True)
         return ta
     else:
-        print("Account does exist")
         return frappe.get_doc(
             "Account",
             {"account_name": "ERCOM HESAPLANAN KDV 20", "account_number": "391.99"},
@@ -400,8 +410,33 @@ def get_uom(unit: str) -> str:
 
 
 #########################################################
+
+
 @frappe.whitelist()
-def sync_items() -> dict[str, str]:
+def sync_ercom():
+    # Setup logging
+    log_dir = os.path.join(frappe.get_site_path(), "logs", "ercom_sync")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(
+        log_dir, f'ercom_sync_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    )
+
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting ERCOM sync process")
+
+    sync_users(logger)
+    sync_items(logger)
+
+
+#########################################################
+@frappe.whitelist()
+def sync_items(logger) -> dict[str, str]:
     """
     Synchronizes items from MySQL database to Frappe.
 
@@ -412,7 +447,8 @@ def sync_items() -> dict[str, str]:
     Returns:
         dict: Message indicating sync status
     """
-    LIMIT: int = 300
+    logger.info("Starting items sync")
+    LIMIT: int = 500
     connection = get_mysql_connection()
     cursor = connection.cursor()
     query: str = f"SELECT * FROM dbpoz ORDER BY PozID DESC LIMIT {LIMIT}"
@@ -420,22 +456,25 @@ def sync_items() -> dict[str, str]:
     data = cursor.fetchall()
 
     if not data:
+        logger.warning("No item data found")
         return {"message": "No data found."}
 
     for row in data:
         item_code: str = f"{row.get('SIPARISNO')}-{row.get('POZNO')}"
         if frappe.db.exists("Item", {"item_code": item_code}):
-            print(f"Item already exist: {item_code}")
+            logger.info(f"Item already exists: {item_code}")
             continue
-        item_result: dict[str, str] = create_item(row)
-        _ = create_bom(row, item_result["docname"])
+        logger.info(f"Creating new item: {item_code}")
+        item_result: dict[str, str] = create_item(row, logger)
+        _ = create_bom(row, item_result["docname"], logger)
 
     cursor.close()
     connection.close()
+    logger.info("Items sync completed")
     return {"message": "Sync Completed"}
 
 
-def create_item(row: dict) -> dict[str, str]:
+def create_item(row: dict, logger) -> dict[str, str]:
     """
     Creates a new Item record in Frappe from MySQL row data.
 
@@ -450,7 +489,7 @@ def create_item(row: dict) -> dict[str, str]:
     custom_code: str = f"{row.get('SIPARISNO')}-{row.get('POZNO')}"
     i.item_code = custom_code
     i.item_name = custom_code
-    i.item_group = "Products"
+    i.item_group = "All Item Groups"
     i.stock_uom = "Unit"
     i.valuation_rate = row.get("TUTAR")
     i.description = row.get("ACIKLAMA")
@@ -462,10 +501,11 @@ def create_item(row: dict) -> dict[str, str]:
     i.custom_remarks = row.get("NOTLAR")
     i.custom_poz_id = row.get("PozID")
     i.insert(ignore_permissions=True)
+    logger.info(f"Created item {custom_code}")
     return {"msg": "Item created successfully.", "docname": i.name}
 
 
-def create_bom(row: dict, item: str) -> dict[str, str]:
+def create_bom(row: dict, item: str, logger) -> dict[str, str]:
     """
     Creates a new Bill of Materials (BOM) record in Frappe from MySQL row data.
 
@@ -489,15 +529,13 @@ def create_bom(row: dict, item: str) -> dict[str, str]:
         },
     )
     b.insert(ignore_permissions=True)
-    # b.submit()
-    print(f"BOM ITEM: {b.item}")
-    print(f"BOM docname: {b.name}")
+    logger.info(f"Created BOM for item {item}")
     return {"msg": "BOM created successfully.", "docname": b.name}
 
 
 ########################## SYNC USERS #########################
 @frappe.whitelist()
-def sync_users() -> dict[str, str]:
+def sync_users(logger) -> dict[str, str]:
     """
     Synchronizes user data from MySQL database to Frappe.
 
@@ -507,6 +545,7 @@ def sync_users() -> dict[str, str]:
     Returns:
         dict: Message indicating sync status
     """
+    logger.info("Starting user sync")
     connection = get_mysql_connection()
     cursor = connection.cursor()
     query: str = "SELECT * FROM dbcari"
@@ -514,19 +553,18 @@ def sync_users() -> dict[str, str]:
     data: list[dict] = cursor.fetchall()
 
     if not data:
+        logger.warning("No user data found")
         return {"message": "No data found"}
 
-    for key, value in data[0].items():
-        print(f"{key}: {value}")
-    create_users(data)
-    # frappe.throw("Some Error")
+    create_users(data, logger)
 
     cursor.close()
     connection.close()
+    logger.info("User sync completed")
     return {"message": "Sync Completed"}
 
 
-def create_users(data: list[dict]) -> None:
+def create_users(data: list[dict], logger) -> None:
     """
     Creates Customer, Address and Contact records from imported data.
 
@@ -535,13 +573,16 @@ def create_users(data: list[dict]) -> None:
     """
     for row in data:
         if frappe.db.exists("Customer", {"customer_name": row["ADI"]}):
-            print(f"Customer already exist: {row['ADI']}")
+            logger.info(f"Customer already exists: {row['ADI']}")
             continue
 
-        customer_result: dict[str, str] = create_customer(row)
-        address_result: dict[str, str] = create_address(row, customer_result["docname"])
+        logger.info(f"Creating new customer: {row['ADI']}")
+        customer_result: dict[str, str] = create_customer(row, logger)
+        address_result: dict[str, str] = create_address(
+            row, customer_result["docname"], logger
+        )
         contact_result: dict[str, str] = create_contact(
-            row, customer_result["docname"], address_result["docname"]
+            row, customer_result["docname"], address_result["docname"], logger
         )
         customer = frappe.get_doc("Customer", customer_result["docname"])
         customer.customer_primary_address = address_result["docname"]
@@ -549,7 +590,7 @@ def create_users(data: list[dict]) -> None:
         customer.save()
 
 
-def create_customer(data: dict) -> dict[str, str]:
+def create_customer(data: dict, logger) -> dict[str, str]:
     """
     Creates a new Customer record in Frappe.
 
@@ -569,10 +610,11 @@ def create_customer(data: dict) -> dict[str, str]:
     c.custom_tax_office = str(data["VDAIRESI"])
     c.tax_id = str(data["VERGINO"])
     c.insert(ignore_permissions=True)
+    logger.info(f"Created customer {c.customer_name}")
     return {"msg": "Customer created successfully.", "docname": c.name}
 
 
-def create_address(data: dict, customer: str) -> dict[str, str]:
+def create_address(data: dict, customer: str, logger) -> dict[str, str]:
     """
     Creates a new Address record in Frappe.
 
@@ -589,7 +631,7 @@ def create_address(data: dict, customer: str) -> dict[str, str]:
     a.address_line1 = str(data["ADRES1"] or data["ADI"])
     a.address_line2 = str(data["ADRES2"])
     a.city = str(data["SEHIR"] or "Bilinmiyor")
-    a.country = "Turkey"
+    a.country = "Turkey" if frappe.db.exists("Country", "Turkey") else "Türkiye"
     a.pincode = str(data["POSTAKODU"])
     if data.get("EMAIL"):
         a.email_id = str(data.get("EMAIL"))
@@ -597,10 +639,11 @@ def create_address(data: dict, customer: str) -> dict[str, str]:
     a.fax = str(data["FAKS"])
     a.append("links", {"link_doctype": "Customer", "link_name": customer})
     a.insert(ignore_permissions=True)
+    logger.info(f"Created address for customer {customer}")
     return {"msg": "Address created successfully.", "docname": a.name}
 
 
-def create_contact(data: dict, customer: str, address: str) -> dict[str, str]:
+def create_contact(data: dict, customer: str, address: str, logger) -> dict[str, str]:
     """
     Creates a new Contact record in Frappe.
 
@@ -625,6 +668,7 @@ def create_contact(data: dict, customer: str, address: str) -> dict[str, str]:
     if is_valid_phone(data["TELEFON2"]):
         c.append("phone_nos", {"phone": str(data["TELEFON2"]), "is_primary_phone": 0})
     c.insert(ignore_permissions=True)
+    logger.info(f"Created contact for customer {customer}")
     return {"msg": "Contact created successfully.", "docname": c.name}
 
 
