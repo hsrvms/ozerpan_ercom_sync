@@ -452,7 +452,7 @@ def sync_items(logger) -> dict[str, str]:
         dict: Message indicating sync status
     """
     logger.info("Starting items sync")
-    LIMIT: int = 500
+    LIMIT: int = 3000
     connection = get_mysql_connection()
     cursor = connection.cursor()
     query: str = f"SELECT * FROM dbpoz ORDER BY PozID DESC LIMIT {LIMIT}"
