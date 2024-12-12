@@ -267,7 +267,11 @@ def update_bom_raw_materials(doc: "frappe.Document", df: pd.DataFrame, logger) -
         item = create_or_update_raw_material_item(stock_code, row, logger)
         rate = float(item.get("valuation_rate", 0.0))
         amount = get_float_value(str(row.get("Toplam Fiyat", "0.0")))
-        qty = round((amount / rate), 7) if rate != 0.0 else 0.0000000
+        qty = (
+            round((amount / rate), 7)
+            if rate != 0.0
+            else get_float_value(row.get("Miktar"))
+        )
 
         items_data.append(
             {
