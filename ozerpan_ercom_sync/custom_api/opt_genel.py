@@ -33,7 +33,6 @@ def create_opt_genel(file_url: str) -> dict[str, str]:
         frappe.ValidationError: If file is not found
         Exception: For other processing errors
     """
-    # frappe.publish_progress(25, title="Bar", description="Some Desc")
     logger_dict = generate_logger("opt_genel_update")
     logger = logger_dict["logger"]
     log_file = logger_dict["log_file"]
