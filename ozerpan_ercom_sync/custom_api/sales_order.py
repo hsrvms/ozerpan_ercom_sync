@@ -4,7 +4,9 @@ from datetime import datetime
 
 import frappe
 import pandas as pd
+from frappe import _
 
+from ozerpan_ercom_sync.custom_api.utils import show_progress
 from ozerpan_ercom_sync.utils import get_mysql_connection
 
 
@@ -133,14 +135,12 @@ def process_excel(file_path, logger):
     )
 
     dtype_dict = {"Stok Kodu": str, "Toplam Fiyat": str}
+    sheets_len = len(sheets)
 
     for i, sheet in enumerate(sheets):
-        percent = (i + 1) * 100 / len(sheets)
-        frappe.publish_progress(
-            percent,
-            title="Sales Order Item Sync",
-            description=f"Syncing Sheet {i+1} of {len(sheets)}",
-        )
+        progress_title = "Sales Order Item Sync"
+        progress_desc = _("Syncing Sheet {0} of {1}").format(i + 1, sheets_len)
+        show_progress(i + 1, sheets_len, progress_title, progress_desc)
         logger.info(f"Processing sheet: {sheet}")
         df = pd.read_excel(file_path, sheet, dtype=dtype_dict)
         if df.empty:
