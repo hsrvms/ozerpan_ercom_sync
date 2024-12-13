@@ -1,15 +1,17 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "field:opt_no",
+ "autoname": "format:{opt_code}-{opt_no}",
  "creation": "2024-12-12 11:29:23.796168",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
   "section_break_npwf",
+  "opt_code",
   "opt_no",
   "machine_no",
-  "profile_list"
+  "profile_list",
+  "dst_list"
  ],
  "fields": [
   {
@@ -19,12 +21,14 @@
   {
    "fieldname": "opt_no",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Opt No",
    "unique": 1
   },
   {
    "fieldname": "machine_no",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Machine No"
   },
   {
@@ -32,15 +36,27 @@
    "fieldtype": "Table",
    "label": "Profile List",
    "options": "Opt Genel Profile List"
+  },
+  {
+   "fieldname": "opt_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Opt Code"
+  },
+  {
+   "fieldname": "dst_list",
+   "fieldtype": "Table",
+   "label": "DST List",
+   "options": "Opt Genel Dst List"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-12-12 14:27:02.299554",
+ "modified": "2024-12-13 12:55:49.792384",
  "modified_by": "Administrator",
  "module": "Ozerpan Ercom Sync",
  "name": "Opt Genel",
- "naming_rule": "By fieldname",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {

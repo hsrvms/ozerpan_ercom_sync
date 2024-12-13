@@ -89,3 +89,85 @@ def get_file_path(file_url: str, logger: logging.Logger) -> str:
         frappe.throw(msg)
 
     return file_path
+
+
+def get_file_info(file_url: str, logger: logging.Logger) -> dict[str, str]:
+    """Constructs and validates file information from URL.
+
+    Args:
+        file_url: URL of the file to locate
+        logger: Logger instance for tracking operations
+
+    Returns:
+        dict: Dictionary containing file information:
+            - file_path: Physical path to the file
+            - file_name: File name without extension
+            - file_extension: File extension
+            - code: First part of file name before underscore
+            - category: Second part of file name after underscore
+
+    Raises:
+        frappe.ValidationError: If file not found
+        IndexError: If file name does not contain expected parts
+    """
+    file_doc = frappe.get_doc("File", {"file_url": file_url})
+    file_location = "private" if file_doc.is_private else "public"
+
+    # Extract file components
+    file_name = os.path.basename(file_url)
+    file_name_without_extension, file_extension = os.path.splitext(file_name)
+
+    try:
+        code, category = file_name_without_extension.split("_")
+    except ValueError as e:
+        msg = f"Invalid file name format: {file_name_without_extension}. Expected format: code_category"
+        logger.error(msg)
+        raise ValueError(msg) from e
+
+    # Validate file exists
+    file_path = frappe.get_site_path(file_location, "files", file_name)
+    if not os.path.exists(file_path):
+        msg = f"File not found: {file_path}"
+        logger.error(msg)
+        frappe.throw(msg)
+
+    return {
+        "path": file_path,
+        "name": file_name_without_extension,
+        "extension": file_extension,
+        "code": code,
+        "category": category,
+    }
+
+
+def check_file_type(extension: str, file_type: str) -> None:
+    """Validates file extension against allowed types.
+
+    Args:
+        extension: File extension including dot (e.g. '.xlsx')
+        file_type: Type of file to validate against ('excel', etc)
+
+    Raises:
+        frappe.ValidationError: If extension not allowed for file_type
+    """
+    ALLOWED_EXTENSIONS = {"excel": {".xls", ".xlsx"}}
+
+    if file_type in ALLOWED_EXTENSIONS:
+        allowed = ALLOWED_EXTENSIONS[file_type]
+        if extension.lower() not in allowed:
+            raise frappe.ValidationError(
+                f"Invalid file format. Allowed formats: {', '.join(allowed)}"
+            )
+    else:
+        raise frappe.ValidationError(
+            f"Invalid file type. Allowed types: {', '.join(ALLOWED_EXTENSIONS.keys())}"
+        )
+
+
+def show_progress(curr_count: int, max_count: int, title: str, desc: str):
+    percent = curr_count * 100 / max_count
+    frappe.publish_progress(
+        percent,
+        title=title,
+        description=desc,
+    )

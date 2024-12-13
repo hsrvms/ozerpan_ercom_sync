@@ -7,7 +7,7 @@ from frappe import _
 
 from ozerpan_ercom_sync.custom_api.utils import (
     generate_logger,
-    get_file_path,
+    get_file_info,
     get_float_value,
 )
 from ozerpan_ercom_sync.utils import get_mysql_connection
@@ -30,18 +30,26 @@ def create_opt_genel(file_url: str) -> dict[str, str]:
             - log_file (str): Path to the generated log file
 
     Raises:
-        frappe.ValidationError: If file is not found
+        frappe.ValidationError: If file is not found or invalid format
         Exception: For other processing errors
     """
     logger_dict = generate_logger("opt_genel_update")
     logger = logger_dict["logger"]
     log_file = logger_dict["log_file"]
 
+    ALLOWED_EXTENSIONS = {".xls", ".xlsx"}
+
     try:
         logger.info(f"Starting Opt Genel update process for file: {file_url}")
-        file_path = get_file_path(file_url, logger)
+        file = get_file_info(file_url, logger)
 
-        process_opt_genel_excel(file_path, logger)
+        file_extension = file.get("extension", "").lower()
+        if file_extension not in ALLOWED_EXTENSIONS:
+            raise frappe.ValidationError(
+                f"Invalid file format. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+            )
+
+        process_opt_genel_excel(file, logger)
         logger.info("Opt Genel update completed successfully.")
 
         return {
@@ -59,43 +67,65 @@ def create_opt_genel(file_url: str) -> dict[str, str]:
         raise
 
 
-def process_opt_genel_excel(file_path: str, logger: logging.Logger) -> None:
+def process_opt_genel_excel(file: dict, logger: logging.Logger) -> None:
     """Processes Excel file containing Opt Genel data.
 
     Args:
-        file_path: Path to Excel file to process
+        file: Dictionary containing file information including path and name
         logger: Logger instance for tracking operations
 
     Raises:
         ValueError: If Excel file format is invalid or opt_no cannot be extracted
-        frappe.ValidationError: If machine number not found
+        frappe.ValidationError: If file path not found or machine number not found
     """
-    logger.info(f"Processing Excel file: {file_path}")
+    logger.info(f"Processing Excel file: {file.get('name')}")
+
+    file_path = file.get("path")
+    if not file_path:
+        raise frappe.ValidationError("File path not found")
 
     try:
-        df = pd.read_excel(file_path)
+        # Read Excel file with error handling
+        try:
+            df = pd.read_excel(file_path)
+        except Exception as e:
+            raise ValueError(f"Failed to read Excel file: {str(e)}")
+
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Invalid Excel file format")
+
+        # Validate dataframe is not empty
+        if df.empty:
+            raise ValueError("Excel file is empty")
 
         # Extract opt number from fourth column header
         opt_no = extract_opt_no(df.columns[3])
         if not opt_no:
             raise ValueError("Could not extract opt number from Excel file")
 
-        # Get total number of rows in dataframe
+        opt_code = file.get("code")
+        if not opt_code:
+            raise ValueError("Could not extract opt code from file")
+
+        # Log data statistics
         total_rows = len(df)
-        logger.info(f"Total rows in dataframe: {total_rows}")
+        total_columns = len(df.columns)
+        logger.info(f"Dataframe dimensions: {total_rows} rows, {total_columns} columns")
 
         # Clean and prepare dataframe
         df.columns = df.iloc[1].str.strip()
         df = df.iloc[2:].reset_index(drop=True)
 
+        # Validate cleaned dataframe
+        if df.empty:
+            raise ValueError("No valid data rows found after cleaning")
+
         # Get machine number from database
         machine_no = get_machine_number(opt_no, logger)
         if not machine_no:
-            raise frappe.ValidationError("Machine not found")
+            raise frappe.ValidationError(f"Machine not found for opt number: {opt_no}")
 
-        create_opt_genel_doc(opt_no, machine_no, df, logger)
+        create_opt_genel_doc(opt_no, opt_code, machine_no, df, logger)
 
     except Exception as e:
         logger.error(f"Error processing Excel file: {str(e)}")
@@ -120,7 +150,7 @@ def get_machine_number(opt_no: str, logger: logging.Logger) -> int:
 
 
 def create_opt_genel_doc(
-    opt_no: str, machine_no: int, df: pd.DataFrame, logger: logging.Logger
+    opt_no: str, opt_code: str, machine_no: int, df: pd.DataFrame, logger: logging.Logger
 ) -> None:
     """Creates or updates an Opt Genel document with item data from dataframe.
 
@@ -136,20 +166,19 @@ def create_opt_genel_doc(
     try:
         # Get existing doc or create new
         opt = (
-            frappe.get_doc("Opt Genel", opt_no)
-            if frappe.db.exists("Opt Genel", opt_no)
+            frappe.get_doc("Opt Genel", {"opt_no": opt_no})
+            if frappe.db.exists("Opt Genel", {"opt_no": opt_no})
             else frappe.new_doc("Opt Genel")
         )
 
         # Set basic fields
         opt.opt_no = opt_no
+        opt.opt_code = opt_code
         opt.machine_no = get_machine_name(machine_no)
 
         # Process items
         items_data = []
         for idx, row in df.iterrows():
-            # percent = ((idx + 1) / len(df)) * 100
-            # frappe.publish_progress(percent, title="Bar", description="Some Desc")
             stock_code = str(row["Stok Kodu"]).strip()
             item_code = frappe.db.exists("Item", f"erc-{stock_code}")
 
