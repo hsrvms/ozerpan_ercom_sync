@@ -1,0 +1,283 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:sayac",
+ "creation": "2024-12-13 16:38:01.288029",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_lnzy",
+  "oto_no",
+  "siparis_no",
+  "cari_kod",
+  "poz_no",
+  "stok_kodu",
+  "model",
+  "olcu",
+  "pozisyon",
+  "aci1",
+  "aci2",
+  "adet",
+  "ercom",
+  "sayac",
+  "montaj_yeri",
+  "kasa_no",
+  "yer_no",
+  "kanat_no",
+  "araba_no",
+  "rc",
+  "program_no",
+  "islem",
+  "bayi_adi",
+  "eksen",
+  "yukseklik",
+  "sol_ic",
+  "sag_ic",
+  "orta",
+  "da_kapi",
+  "ds_kodu",
+  "ds_boyu",
+  "profil_tipi",
+  "hesap_kodu",
+  "esiksiz",
+  "wc",
+  "kanat_index",
+  "aciklama",
+  "uretim_sayac",
+  "makina_no",
+  "sanal_adet",
+  "barkod"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_lnzy",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "oto_no",
+   "fieldtype": "Float",
+   "label": "Oto No"
+  },
+  {
+   "fieldname": "siparis_no",
+   "fieldtype": "Data",
+   "label": "Siparis No"
+  },
+  {
+   "fieldname": "cari_kod",
+   "fieldtype": "Data",
+   "label": "Cari Kod"
+  },
+  {
+   "fieldname": "poz_no",
+   "fieldtype": "Int",
+   "label": "Poz No"
+  },
+  {
+   "fieldname": "stok_kodu",
+   "fieldtype": "Data",
+   "label": "Stok Kodu"
+  },
+  {
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "label": "Model"
+  },
+  {
+   "fieldname": "olcu",
+   "fieldtype": "Data",
+   "label": "Olcu"
+  },
+  {
+   "fieldname": "pozisyon",
+   "fieldtype": "Data",
+   "label": "Pozisyon"
+  },
+  {
+   "fieldname": "aci1",
+   "fieldtype": "Float",
+   "label": "Aci1"
+  },
+  {
+   "fieldname": "aci2",
+   "fieldtype": "Float",
+   "label": "Aci2"
+  },
+  {
+   "fieldname": "adet",
+   "fieldtype": "Int",
+   "label": "Adet"
+  },
+  {
+   "fieldname": "ercom",
+   "fieldtype": "Data",
+   "label": "Ercom"
+  },
+  {
+   "fieldname": "sayac",
+   "fieldtype": "Int",
+   "label": "Sayac",
+   "unique": 1
+  },
+  {
+   "fieldname": "montaj_yeri",
+   "fieldtype": "Data",
+   "label": "Montaj Yeri"
+  },
+  {
+   "fieldname": "kasa_no",
+   "fieldtype": "Int",
+   "label": "Kasa No"
+  },
+  {
+   "fieldname": "yer_no",
+   "fieldtype": "Int",
+   "label": "Yer No"
+  },
+  {
+   "fieldname": "kanat_no",
+   "fieldtype": "Int",
+   "label": "Kanat No"
+  },
+  {
+   "fieldname": "araba_no",
+   "fieldtype": "Int",
+   "label": "Araba No"
+  },
+  {
+   "fieldname": "rc",
+   "fieldtype": "Data",
+   "label": "RC"
+  },
+  {
+   "fieldname": "program_no",
+   "fieldtype": "Float",
+   "label": "Program No"
+  },
+  {
+   "fieldname": "islem",
+   "fieldtype": "Int",
+   "label": "Islem"
+  },
+  {
+   "fieldname": "bayi_adi",
+   "fieldtype": "Data",
+   "label": "Bayi Adi"
+  },
+  {
+   "fieldname": "eksen",
+   "fieldtype": "Float",
+   "label": "Eksen"
+  },
+  {
+   "fieldname": "yukseklik",
+   "fieldtype": "Float",
+   "label": "Yukseklik"
+  },
+  {
+   "fieldname": "sol_ic",
+   "fieldtype": "Float",
+   "label": "Sol Ic"
+  },
+  {
+   "fieldname": "sag_ic",
+   "fieldtype": "Float",
+   "label": "Sag Ic"
+  },
+  {
+   "fieldname": "orta",
+   "fieldtype": "Float",
+   "label": "Orta"
+  },
+  {
+   "fieldname": "da_kapi",
+   "fieldtype": "Int",
+   "label": "Da Kapi"
+  },
+  {
+   "fieldname": "ds_kodu",
+   "fieldtype": "Data",
+   "label": "Ds Kodu"
+  },
+  {
+   "fieldname": "ds_boyu",
+   "fieldtype": "Int",
+   "label": "Ds Boyu"
+  },
+  {
+   "fieldname": "profil_tipi",
+   "fieldtype": "Int",
+   "label": "Profil Tipi"
+  },
+  {
+   "fieldname": "hesap_kodu",
+   "fieldtype": "Data",
+   "label": "Hesap Kodu"
+  },
+  {
+   "fieldname": "esiksiz",
+   "fieldtype": "Int",
+   "label": "Esiksiz"
+  },
+  {
+   "fieldname": "wc",
+   "fieldtype": "Int",
+   "label": "WC"
+  },
+  {
+   "fieldname": "kanat_index",
+   "fieldtype": "Int",
+   "label": "Kanat Index"
+  },
+  {
+   "fieldname": "aciklama",
+   "fieldtype": "Small Text",
+   "label": "Aciklama"
+  },
+  {
+   "fieldname": "uretim_sayac",
+   "fieldtype": "Int",
+   "label": "Uretim Sayac"
+  },
+  {
+   "fieldname": "makina_no",
+   "fieldtype": "Int",
+   "label": "Makina No"
+  },
+  {
+   "fieldname": "sanal_adet",
+   "fieldtype": "Data",
+   "label": "Sanal Adet"
+  },
+  {
+   "fieldname": "barkod",
+   "fieldtype": "Data",
+   "label": "Barkod"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2024-12-16 15:50:33.576372",
+ "modified_by": "Administrator",
+ "module": "Ozerpan Ercom Sync",
+ "name": "TesDetay",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
