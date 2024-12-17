@@ -104,23 +104,30 @@ def get_tesdetay_data():
 
 
 def generate_barcode(araba_no, yer_no, stok_kodu, rc, model, olcu, eksen):
-    def pad_number(num, min_length=2):
-        return f"{num}0" if len(str(num)) < min_length else str(num)
+    ADJUSTMENT = 6
+    MODELS_WITH_ADJUSTMENT = {"KANAT", "KASA"}
+    PAD_LENGTH = 2
+    MEASUREMENT_LENGTH = 4
 
-    def process_measurement(value, adjustment=6):
+    def pad_value(value, length=PAD_LENGTH, leading_zero=False):
+        value_str = str(value)
+        if len(value_str) < length:
+            return ("0" + value_str) if leading_zero else (value_str + "0")
+        return value_str
+
+    def process_measurement(value):
         if value is None:
             return 0
-        return max(0, value - adjustment if model in ("KANAT", "KASA") else value)
+        adjustment = ADJUSTMENT if model in MODELS_WITH_ADJUSTMENT else 0
+        return max(0, value - adjustment)
 
     # Format input values
-    araba_no = pad_number(araba_no)
-    yer_no = pad_number(yer_no)
+    araba_no_padded = pad_value(araba_no)
+    yer_no_padded = pad_value(yer_no, leading_zero=True)
 
-    # Process measurements
-    olcu = str(int(process_measurement(olcu))).rjust(4, "0")
-    eksen = str(int(process_measurement(eksen))).rjust(4, "0")
+    # Process and format measurements
+    olcu_processed = str(int(process_measurement(olcu))).rjust(MEASUREMENT_LENGTH, "0")
+    eksen_processed = str(int(process_measurement(eksen))).rjust(MEASUREMENT_LENGTH, "0")
 
-    # Generate barcode
-    barcode = f"K{araba_no}{yer_no} {stok_kodu}   {rc} {olcu} 00 {eksen} 00"
-
-    return barcode
+    # Generate barcode with consistent spacing
+    return f"K{araba_no_padded}{yer_no_padded} {stok_kodu}   {rc} {olcu_processed} 00 {eksen_processed} 00"
