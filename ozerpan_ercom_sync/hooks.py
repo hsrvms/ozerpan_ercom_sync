@@ -43,7 +43,10 @@ app_license = "mit"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"Customer": "public/js/customer/customer.js"}
+doctype_js = {
+    "Sales Order": "public/js/sales_order/sales_order.js",
+    "Customer": "public/js/customer/customer.js",
+}
 doctype_list_js = {
     # "Customer": "public/js/customer/customer_list.js",
     # "Item": "public/js/item/item_list.js",
@@ -142,13 +145,16 @@ doctype_list_js = {
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "Sales Order": {
+        "validate": "ozerpan_ercom_sync.sales_order_hooks.validate.validate",
+    }
+    # 	"*": {
+    # 		"on_update": "method",
+    # 		"on_cancel": "method",
+    # 		"on_trash": "method"
+    # 	}
+}
 
 # Scheduled Tasks
 # ---------------
