@@ -13,6 +13,7 @@ frappe.ui.form.on("Ozerpan Discount", {
   },
   custom_ozerpan_discount_remove(frm) {
     console.log("--Remove Row--");
+    calculate_total_discount(frm);
   },
   rate(frm) {
     console.log("--Rate--");
