@@ -241,7 +241,7 @@
   },
   {
    "fieldname": "makina_no",
-   "fieldtype": "Int",
+   "fieldtype": "Data",
    "label": "Makina No"
   },
   {
@@ -257,7 +257,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-12-16 15:50:33.576372",
+ "modified": "2024-12-19 09:29:28.618140",
  "modified_by": "Administrator",
  "module": "Ozerpan Ercom Sync",
  "name": "TesDetay",

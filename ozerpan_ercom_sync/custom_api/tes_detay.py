@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 
-from ozerpan_ercom_sync.custom_api.utils import generate_logger
+from ozerpan_ercom_sync.custom_api.utils import generate_logger, get_machine_name, get_machine_number
 from ozerpan_ercom_sync.utils import get_mysql_connection
 
 
@@ -71,12 +71,16 @@ def sync_tes_detay():
                 "sanal_adet": "SANALADET",
                 "aciklama": "ACIKLAMA",
                 "uretim_sayac": "URETIMSAYAC",
-                "makina_no": "MAKINANO",
+                # "makina_no": "MAKINANO",
             }
 
             for field, key in field_mappings.items():
                 setattr(td, field, row.get(key))
 
+            machine_no = get_machine_number(td.oto_no, logger)
+            machine_name = get_machine_name(machine_no)
+
+            td.makina_no = machine_name
             td.barkod = barcode
             td.insert()
             synced_count += 1
@@ -130,4 +134,4 @@ def generate_barcode(araba_no, yer_no, stok_kodu, rc, model, olcu, eksen):
     eksen_processed = str(int(process_measurement(eksen))).rjust(MEASUREMENT_LENGTH, "0")
 
     # Generate barcode with consistent spacing
-    return f"K{araba_no_padded}{yer_no_padded} {stok_kodu}   {rc} {olcu_processed} 00 {eksen_processed} 00"
+    return f"K{araba_no_padded}{yer_no_padded}{stok_kodu}   {rc}{olcu_processed}00{eksen_processed}00"
