@@ -1,123 +1,17 @@
 import re
 
 import frappe
+from frappe import _
 
-from ozerpan_ercom_sync.custom_api.utils import generate_logger
+from ozerpan_ercom_sync.custom_api.utils import generate_logger, show_progress
 from ozerpan_ercom_sync.utils import get_mysql_connection
 
 
 @frappe.whitelist()
 def sync_ercom():
-    frappe.publish_progress(
-        1,
-        title="ERCOM Item Sync",
-        description="Syncing ERCOM Database",
-    )
     logger = generate_logger("sync_ercom")["logger"]
-    sync_users(logger)
-    sync_items(logger)
-
-
-def sync_items(logger) -> dict[str, str]:
-    """
-    Synchronizes items from MySQL database to Frappe.
-
-    Connects to MySQL database, retrieves records from dbpoz table ordered by PozID desc
-    with a limit of 2 records, and creates corresponding Item and BOM records in Frappe
-    if they don't already exist.
-
-    Returns:
-        dict: Message indicating sync status
-    """
-    logger.info("Starting items sync")
-    LIMIT: int = 3000
-
-    with get_mysql_connection() as connection:
-        with connection.cursor() as cursor:
-            query: str = f"SELECT * FROM dbpoz ORDER BY PozID DESC LIMIT {LIMIT}"
-            cursor.execute(query)
-            data = cursor.fetchall()
-
-            if not data:
-                logger.warning("No item data found")
-                return {"message": "No data found."}
-
-            for i, row in enumerate(data):
-                percent = (i + 1) * 100 / LIMIT
-                frappe.publish_progress(
-                    percent,
-                    title="ERCOM Item Sync",
-                    description=f"Syncing item {i+1} of {LIMIT}",
-                )
-                item_code: str = f"{row.get('SIPARISNO')}-{row.get('POZNO')}"
-                if frappe.db.exists("Item", {"item_code": item_code}):
-                    logger.info(f"Item already exists: {item_code}")
-                    continue
-                logger.info(f"Creating new item: {item_code}")
-                item_result: dict[str, str] = create_item(row, logger)
-                _ = create_bom(row, item_result["docname"], logger)
-
-    logger.info("Items sync completed")
-    return {"message": "Sync Completed"}
-
-
-def create_bom(row: dict, item: str, logger) -> dict[str, str]:
-    """
-    Creates a new Bill of Materials (BOM) record in Frappe from MySQL row data.
-
-    Args:
-        row (dict): Dictionary containing BOM data from MySQL dbpoz table
-        item (str): Item docname to link BOM to
-
-    Returns:
-        dict: Message indicating success and docname of created BOM
-            e.g. {"msg": "BOM created successfully.", "docname": "BOM-001"}
-    """
-    company: str = frappe.defaults.get_user_default("Company")
-    b = frappe.new_doc("BOM")
-    b.item = item
-    b.company = company
-    b.quantity = row.get("ADET")
-    b.append(
-        "items",
-        {
-            "item_code": item,
-        },
-    )
-    b.insert(ignore_permissions=True)
-    logger.info(f"Created BOM for item {item}")
-    return {"msg": "BOM created successfully.", "docname": b.name}
-
-
-def create_item(row: dict, logger) -> dict[str, str]:
-    """
-    Creates a new Item record in Frappe from MySQL row data.
-
-    Args:
-        row (dict): Dictionary containing item data from MySQL dbpoz table
-
-    Returns:
-        dict: Message indicating success and docname of created Item
-            e.g. {"msg": "Item created successfully.", "docname": "ITEM-001"}
-    """
-    i = frappe.new_doc("Item")
-    custom_code: str = f"{row.get('SIPARISNO')}-{row.get('POZNO')}"
-    i.item_code = custom_code
-    i.item_name = custom_code
-    i.item_group = "All Item Groups"
-    i.stock_uom = "Unit"
-    i.valuation_rate = row.get("TUTAR")
-    i.description = row.get("ACIKLAMA")
-    i.custom_serial = row.get("SERI")
-    i.custom_width = row.get("GENISLIK")
-    i.custom_height = row.get("HEIGHT")
-    i.custom_color = row.get("RENK")
-    i.custom_quantity = row.get("ADET")
-    i.custom_remarks = row.get("NOTLAR")
-    i.custom_poz_id = row.get("PozID")
-    i.insert(ignore_permissions=True)
-    logger.info(f"Created item {custom_code}")
-    return {"msg": "Item created successfully.", "docname": i.name}
+    # sync_users(logger)
+    sync_orders(logger)
 
 
 def sync_users(logger) -> dict[str, str]:
@@ -155,7 +49,14 @@ def create_users(data: list[dict], logger) -> None:
     Args:
         data_list (list[dict]): List of dictionaries containing user data from MySQL
     """
-    for row in data:
+    data_len = len(data)
+    for i, row in enumerate(data):
+        show_progress(
+            curr_count=i + 1,
+            max_count=data_len,
+            title="Customer",
+            desc=f"Updating Customers... {i+1}/{data_len}",
+        )
         if frappe.db.exists("Customer", {"customer_name": row["ADI"]}):
             logger.info(f"Customer already exists: {row['ADI']}")
             continue
@@ -273,3 +174,98 @@ def is_valid_phone(phone: str) -> bool:
     ):
         return True
     return False
+
+
+def sync_orders(logger):
+    """Synchronizes orders from MySQL database to Frappe."""
+    with get_mysql_connection() as connection:
+        with connection.cursor() as cursor:
+            LIMIT: int = 1
+            query: str = f"SELECT * FROM dbsiparis ORDER BY SAYAC DESC LIMIT {LIMIT}"
+            cursor.execute(query)
+            data = cursor.fetchall()
+
+            if not data:
+                logger.warning("No order data found")
+                return {"message": "No data found."}
+
+            logger.info("Starting order sync")
+            placeholder_item = get_placeholder_item()
+            data_len = len(data)
+
+            for i, row in enumerate(data):
+                show_progress(
+                    curr_count=i + 1,
+                    max_count=data_len,
+                    title=_("Sales Order"),
+                    desc=f"Updating Sales Order... {i+1}/{data_len}",
+                )
+                try:
+                    create_sales_order(
+                        data=row, placeholder_item=placeholder_item, logger=logger
+                    )
+                except Exception as e:
+                    logger.error(f"Error creating sales order: {str(e)}")
+                    continue
+
+            logger.info("Order sync completed")
+            return {"message": "Sync Completed"}
+
+
+def create_sales_order(data: dict, placeholder_item: str, logger) -> None:
+    """Creates a sales order in Frappe from imported data."""
+    order_no = data.get("SIPARISNO")
+    customer = data.get("CARIUNVAN")
+
+    if frappe.db.exists("Sales Order", {"custom_ercom_order_no": order_no}):
+        logger.info(f"Sales Order {order_no} already exists")
+        return
+
+    if not frappe.db.exists("Customer", customer):
+        error_msg = f"Customer ({customer}) does not exist for order ({order_no})"
+        logger.error(error_msg)
+        frappe.throw(_(error_msg))
+
+    so = frappe.new_doc("Sales Order")
+    so_data = {
+        "custom_ercom_order_no": order_no,
+        "transaction_date": data.get("SIPTARIHI"),
+        "delivery_date": data.get("SEVKTARIHI"),
+        "customer": customer,
+        "custom_remarks": data.get("NOTLAR"),
+        "company": frappe.defaults.get_user_default("company"),
+        "order_type": "Sales",
+        "currency": "TRY",
+        "selling_price_list": "Standard Selling",
+    }
+
+    so.update(so_data)
+    so.append(
+        "items",
+        {
+            "item_code": placeholder_item,
+            "item_name": placeholder_item,
+            "delivery_date": data.get("SEVKTARIHI"),
+            "qty": 1,
+            "uom": "Nos",
+        },
+    )
+    so.save(ignore_permissions=True)
+    logger.info(f"Created sales order {order_no}")
+
+
+def get_placeholder_item() -> str:
+    """Gets or creates a placeholder item for sales orders."""
+    placeholder_item_name = "Place Holder Item"
+    if not frappe.db.exists("Item", placeholder_item_name):
+        placeholder_item = frappe.get_doc(
+            {
+                "doctype": "Item",
+                "item_code": placeholder_item_name,
+                "item_name": placeholder_item_name,
+                "item_group": "All Item Groups",
+                "stock_uom": "Nos",
+            }
+        )
+        placeholder_item.insert()
+    return placeholder_item_name
