@@ -101,6 +101,7 @@ def get_tesdetay_data():
             query = """
                 SELECT *
                 FROM dbtesdetay
+                ORDER BY OTONO DESC
                 LIMIT 100
             """
             cursor.execute(query)
