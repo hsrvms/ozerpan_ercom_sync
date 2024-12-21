@@ -10,7 +10,7 @@ from ozerpan_ercom_sync.utils import get_mysql_connection
 @frappe.whitelist()
 def sync_ercom():
     logger = generate_logger("sync_ercom")["logger"]
-    # sync_users(logger)
+    sync_users(logger)
     sync_orders(logger)
 
 
@@ -180,7 +180,7 @@ def sync_orders(logger):
     """Synchronizes orders from MySQL database to Frappe."""
     with get_mysql_connection() as connection:
         with connection.cursor() as cursor:
-            LIMIT: int = 1
+            LIMIT: int = 100
             query: str = f"SELECT * FROM dbsiparis ORDER BY SAYAC DESC LIMIT {LIMIT}"
             cursor.execute(query)
             data = cursor.fetchall()
@@ -215,28 +215,34 @@ def sync_orders(logger):
 def create_sales_order(data: dict, placeholder_item: str, logger) -> None:
     """Creates a sales order in Frappe from imported data."""
     order_no = data.get("SIPARISNO")
-    customer = data.get("CARIUNVAN")
+    customer_name = data.get("CARIUNVAN")
+    current_code = data.get("CARIKOD")
 
     if frappe.db.exists("Sales Order", {"custom_ercom_order_no": order_no}):
         logger.info(f"Sales Order {order_no} already exists")
         return
 
-    if not frappe.db.exists("Customer", customer):
-        error_msg = f"Customer ({customer}) does not exist for order ({order_no})"
+    # TODO: Get customer by carikod
+    if not frappe.db.exists("Customer", {"custom_current_code": current_code}):
+        error_msg = f"Customer ({customer_name}-{current_code}) does not exist for order ({order_no})"
         logger.error(error_msg)
         frappe.throw(_(error_msg))
+
+    customer = frappe.get_doc("Customer", {"custom_current_code": current_code})
 
     so = frappe.new_doc("Sales Order")
     so_data = {
         "custom_ercom_order_no": order_no,
         "transaction_date": data.get("SIPTARIHI"),
         "delivery_date": data.get("SEVKTARIHI"),
-        "customer": customer,
+        "customer": customer.get("name"),
         "custom_remarks": data.get("NOTLAR"),
         "company": frappe.defaults.get_user_default("company"),
         "order_type": "Sales",
         "currency": "TRY",
         "selling_price_list": "Standard Selling",
+        "apply_discount_on": "Grand Total",
+        "additional_discount_percentage": customer.get("custom_total_discount_rate"),
     }
 
     so.update(so_data)
