@@ -1,4 +1,5 @@
 import logging
+from typing import Dict, List, Optional, Tuple
 
 import frappe
 import pandas as pd
@@ -11,29 +12,25 @@ from ozerpan_ercom_sync.custom_api.utils import (
 )
 from ozerpan_ercom_sync.utils import get_mysql_connection
 
+ALLOWED_EXTENSIONS = {".xls", ".xlsx"}
+DEFAULT_TAX_ACCOUNT = {
+    "name": "ERCOM HESAPLANAN KDV 20",
+    "number": "391.99",
+    "tax_rate": 20,
+}
+
 
 @frappe.whitelist()
-def upload_file(file_url: str) -> dict[str, str]:
+def upload_file(file_url: str) -> Dict[str, str]:
+    """Upload and process Excel file"""
     logger_dict = generate_logger("file_upload")
     logger = logger_dict["logger"]
     log_file = logger_dict["log_file"]
 
-    ALLOWED_EXTENSIONS = {".xls", ".xlsx"}
-
     try:
         logger.info(f"Defining file: {file_url}")
         file = get_file_info(file_url, logger)
-        file_extension = file.get("extension", "").lower()
-        file_path = file.get("path", "")
-
-        if not file_path:
-            raise frappe.ValidationError("File path not found.")
-
-        if file_extension not in ALLOWED_EXTENSIONS:
-            raise frappe.ValidationError(
-                f"Invalid file format. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
-            )
-
+        validate_file(file)
         process_file_by_category(file, logger)
 
         return {
@@ -45,147 +42,184 @@ def upload_file(file_url: str) -> dict[str, str]:
     except frappe.ValidationError as e:
         logger.error(f"Validation error: {str(e)}")
         raise
-
     except Exception as e:
         logger.error(f"Error during File Upload: {str(e)}")
+        raise
 
 
-def process_file_by_category(file: dict, logger: logging.Logger):
+def validate_file(file: Dict) -> None:
+    """Validate file extension and path"""
+    file_extension = file.get("extension", "").lower()
+    file_path = file.get("path", "")
+
+    if not file_path:
+        raise frappe.ValidationError("File path not found.")
+
+    if file_extension not in ALLOWED_EXTENSIONS:
+        raise frappe.ValidationError(
+            f"Invalid file format. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+
+
+def process_file_by_category(file: Dict, logger: logging.Logger) -> None:
+    """Route file processing based on category"""
     logger.info("Detecting file category...")
-    file_category = file.get("category").lower()
+    file_category = file.get("category", "").lower()
     if file_category.startswith("mly"):
         logger.info("MLY file detected.")
         process_mly(file, logger)
 
 
-def process_mly(file: dict, logger: logging.Logger):
+def process_mly(file: Dict, logger: logging.Logger) -> None:
+    """Process MLY type Excel file"""
     logger.info("Processing MLY file...")
-    file_path = file.get("path")
     try:
-        try:
-            df = pd.read_excel(file_path)
-        except Exception as e:
-            raise ValueError(f"Failed to read Excel file: {str(e)}")
-
-        if not isinstance(df, pd.DataFrame):
-            raise ValueError("Invalid Excel file format.")
-
-        if df.empty:
-            raise ValueError("Excel file is empty.")
-
-        ef = pd.ExcelFile(file_path)
-        sheets = ef.sheet_names
-
-        order_no = pd.read_excel(file_path).tail(3)["Stok Kodu"].iloc[0]
+        df, sheets = read_excel_file(file["path"])
+        order_no = extract_order_number(df)
         poz_data = get_poz_data(order_no, logger)
-        print("\n\n\n")
-        print("Sheets:", sheets)
-        print("Order No:", order_no)
-        print(f"poz_data: {poz_data[0].get('ADET')}")
-        print("\n\n\n")
-        if not frappe.db.exists(
-            "Sales Order",
-            {
-                "custom_ercom_order_no": order_no,
-                "status": "Draft",
-            },
-        ):
-            logger.error("Sales Order not found.")
-            raise ValueError(
-                "No such Sales Order found. Please sync the database before uploading the file."
-            )
-        so = frappe.get_last_doc(
-            "Sales Order",
-            {
-                "custom_ercom_order_no": order_no,
-                "status": "Draft",
-            },
-        )
 
-        tax_account = get_tax_account()
-        so.append(
-            "taxes",
-            {
-                "charge_type": "On Net Total",
-                "account_head": tax_account.get("name"),
-                "rate": tax_account.get("tax_rate"),
-                "description": tax_account.get("name"),
-            },
-        )
+        sales_order = get_sales_order(order_no, logger)
+        update_sales_order_taxes(sales_order)
 
-        dtype_dict = {"Stok Kodu": str, "Toplam Fiyat": str}
-        sheets_len = len(sheets)
-        so_item_table = []
-
-        for i, sheet in enumerate(sheets):
-            show_progress(
-                curr_count=i + 1,
-                max_count=sheets_len,
-                title=_("Sales Order File Upload"),
-                desc=_("Syncing Sheet {0} of {1}").format(i + 1, sheets_len),
-            )
-            logger.info(f"Processing sheet: {sheet}")
-
-            df = pd.read_excel(file_path, sheet, dtype=dtype_dict)
-            if df.empty:
-                logger.warning(f"Empty sheet found: {sheet}")
-                continue
-
-            tail = df.tail(3).copy()
-            filtered_df = df[df["Stok Kodu"].str.startswith("#", na=False)].copy()
-            item_code = f"{tail['Stok Kodu'].iloc[0]}-{tail['Stok Kodu'].iloc[1]}"
-            total_price = tail["Toplam Fiyat"].iloc[0]
-            logger.info(f"Processing item: {item_code}")
-
-            item = create_item(
-                item_code=item_code,
-                total_price=total_price,
-                poz_data=poz_data[i],
-                logger=logger,
-            )
-            print("ItemItem:", item)
-            bom_result = create_bom(
-                item_name=item.name,
-                qty=poz_data[i].get("ADET"),
-                df=filtered_df,
-                logger=logger,
-            )
-            so_item_table.append(
-                {
-                    "item_code": item.item_code,
-                    "item_name": item.item_name,
-                    "description": item.description,
-                    "qty": item.custom_quantity,
-                    "uom": item.stock_uom,
-                }
-            )
-        print("so items table:", so_item_table)
-        so.set("items", so_item_table)
-        so.save(ignore_permissions=True)
-        # so.submit()
+        so_items = process_sheets(file["path"], sheets, poz_data, logger)
+        update_sales_order_items(sales_order, so_items)
 
     except Exception as e:
         logger.error(f"Error processing MLY file: {str(e)}")
         frappe.throw(_("Error processing MLY file: {0}").format(str(e)))
 
 
-def get_poz_data(order_no: str, logger: logging.Logger) -> list[tuple]:
-    """Get order data from dbpoz table
+def read_excel_file(file_path: str) -> Tuple[pd.DataFrame, List[str]]:
+    """Read Excel file and validate content"""
+    try:
+        df = pd.read_excel(file_path)
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("Invalid Excel file format.")
+        if df.empty:
+            raise ValueError("Excel file is empty.")
 
-    Args:
-        order_no: The order number to query for
-        logger: Logger instance for logging messages
+        ef = pd.ExcelFile(file_path)
+        return df, ef.sheet_names
+    except Exception as e:
+        raise ValueError(f"Failed to read Excel file: {str(e)}")
 
-    Returns:
-        List of tuples containing order data rows
 
-    Raises:
-        frappe.ValidationError: If there is an error fetching the data
-    """
+def extract_order_number(df: pd.DataFrame) -> str:
+    """Extract order number from dataframe"""
+    return df.tail(3)["Stok Kodu"].iloc[0]
+
+
+def get_sales_order(order_no: str, logger: logging.Logger):
+    """Fetch sales order document"""
+    if not frappe.db.exists(
+        "Sales Order",
+        {
+            "custom_ercom_order_no": order_no,
+            "status": "Draft",
+        },
+    ):
+        logger.error("Sales Order not found.")
+        raise ValueError(
+            "No such Sales Order found. Please sync the database before uploading the file."
+        )
+    return frappe.get_last_doc(
+        "Sales Order",
+        {
+            "custom_ercom_order_no": order_no,
+            "status": "Draft",
+        },
+    )
+
+
+def update_sales_order_taxes(sales_order) -> None:
+    """Update sales order tax information"""
+    tax_account = get_tax_account()
+    sales_order.append(
+        "taxes",
+        {
+            "charge_type": "On Net Total",
+            "account_head": tax_account.get("name"),
+            "rate": tax_account.get("tax_rate"),
+            "description": tax_account.get("name"),
+        },
+    )
+
+
+def process_sheets(
+    file_path: str, sheets: List[str], poz_data: List[Dict], logger: logging.Logger
+) -> List[Dict]:
+    """Process all sheets in Excel file"""
+    dtype_dict = {"Stok Kodu": str, "Toplam Fiyat": str}
+    so_item_table = []
+
+    for i, sheet in enumerate(sheets):
+        show_progress(
+            curr_count=i + 1,
+            max_count=len(sheets),
+            title=_("Sales Order File Upload"),
+            desc=_("Syncing Sheet {0} of {1}").format(i + 1, len(sheets)),
+        )
+        logger.info(f"Processing sheet: {sheet}")
+
+        try:
+            sheet_data = process_single_sheet(
+                file_path, sheet, dtype_dict, poz_data[i], logger
+            )
+        except IndexError:
+            logger.warning(f"Skipping empty sheet {sheet} - no matching poz_data index")
+            continue
+        if sheet_data:
+            so_item_table.append(sheet_data)
+
+    return so_item_table
+
+
+def process_single_sheet(
+    file_path: str, sheet: str, dtype_dict: Dict, poz_data: Dict, logger: logging.Logger
+) -> Optional[Dict]:
+    """Process individual sheet from Excel file"""
+    df = pd.read_excel(file_path, sheet, dtype=dtype_dict)
+    if df.empty:
+        logger.warning(f"Empty sheet found: {sheet}")
+        return None
+
+    tail = df.tail(3).copy()
+    filtered_df = df[df["Stok Kodu"].str.startswith("#", na=False)].copy()
+
+    item_code = f"{tail['Stok Kodu'].iloc[0]}-{tail['Stok Kodu'].iloc[1]}"
+    total_price = tail["Toplam Fiyat"].iloc[0]
+
+    logger.info(f"Processing item: {item_code}")
+
+    item = create_item(item_code, total_price, poz_data, logger)
+    bom_result = create_bom(item.name, poz_data.get("ADET"), filtered_df, logger)
+
+    return {
+        "item_code": item.item_code,
+        "item_name": item.item_name,
+        "description": item.description,
+        "qty": item.custom_quantity,
+        "uom": item.stock_uom,
+        "rate": bom_result.get("total_cost"),
+    }
+
+
+def update_sales_order_items(sales_order, items: List[Dict]) -> None:
+    """Update sales order with processed items"""
+    sales_order.set("items", items)
+    sales_order.save(ignore_permissions=True)
+
+
+def get_poz_data(order_no: str, logger: logging.Logger) -> List[Tuple]:
+    """Get order data from dbpoz table"""
     try:
         with get_mysql_connection() as connection:
             with connection.cursor() as cursor:
-                query = "SELECT SAYAC, SIPARISNO, GENISLIK, YUKSEKLIK, ADET, SERI, ACIKLAMA, NOTLAR, PozID FROM dbpoz WHERE SIPARISNO = %s"
+                query = """
+                    SELECT SAYAC, SIPARISNO, GENISLIK, YUKSEKLIK, ADET,
+                    SERI, ACIKLAMA, NOTLAR, PozID
+                    FROM dbpoz WHERE SIPARISNO = %s
+                """
                 cursor.execute(query, (order_no,))
                 results = cursor.fetchall()
                 logger.info(f"Retrieved {len(results)} records for order {order_no}")
@@ -197,95 +231,118 @@ def get_poz_data(order_no: str, logger: logging.Logger) -> list[tuple]:
         raise frappe.ValidationError(error_msg)
 
 
-def create_bom(item_name: str, qty, df, logger: logging.Logger):
-    company: str = frappe.defaults.get_user_default("Company")
-    b = frappe.new_doc("BOM")
-    b.item = item_name
-    b.company = company
-    b.quantity = qty
-    items_table = []
+def create_bom(
+    item_name: str, qty: float, df: pd.DataFrame, logger: logging.Logger
+) -> Dict:
+    """Create Bill of Materials document"""
+    company = frappe.defaults.get_user_default("Company")
+    bom = frappe.new_doc("BOM")
+    bom.item = item_name
+    bom.company = company
+    bom.quantity = qty
+    bom.rm_cost_as_per = "Price List"
+    bom.buying_price_list = "Standard Selling"
 
-    for idx, row in df.iterrows():
-        print(f"\n\n\nROW: {row}\n\n\n")
+    items_table = []
+    for _, row in df.iterrows():
         stock_code = row["Stok Kodu"].lstrip("#")
         if not frappe.db.exists("Item", stock_code):
             raise ValueError(f"No such item: {stock_code}")
+
         item = frappe.get_doc("Item", stock_code)
         if not item.custom_kit:
-            rate = get_float_value(str(row.get("Birim Fiyat", "0.0")))
-            amount = get_float_value(str(row.get("Toplam Fiyat", "0.0")))
-            item_qty = (
-                round((amount / rate), 7)
-                if rate != 0.0
-                else get_float_value(row.get("Miktar"))
-            )
-            items_table.append(
-                {
-                    "item_code": item.get("item_code"),
-                    "item_name": item.get("item_name"),
-                    "description": item.get("description"),
-                    "uom": str(row.get("Birim")),
-                    "qty": item_qty,
-                    "rate": rate,
-                }
-            )
-    print("Table:", items_table)
-    b.set("items", items_table)
-    b.save(ignore_permissions=True)
-    b.submit()
+            items_table.append(create_bom_item(row, item))
+
+    bom.set("items", items_table)
+    bom.save(ignore_permissions=True)
+    bom.submit()
+
     logger.info(f"Created BOM for item {item_name}")
-    return {"msg": "BOM created successfully.", "docname": b.name}
+    return {
+        "msg": "BOM created successfully.",
+        "docname": bom.name,
+        "total_cost": bom.total_cost,
+    }
+
+
+def create_bom_item(row: pd.Series, item) -> Dict:
+    """Create BOM item entry"""
+    rate = get_float_value(str(row.get("Birim Fiyat", "0.0")))
+    amount = get_float_value(str(row.get("Toplam Fiyat", "0.0")))
+    item_qty = (
+        round((amount / rate), 7) if rate != 0.0 else get_float_value(row.get("Miktar"))
+    )
+
+    return {
+        "item_code": item.get("item_code"),
+        "item_name": item.get("item_name"),
+        "description": item.get("description"),
+        "uom": str(row.get("Birim")),
+        "qty": item_qty,
+        "rate": rate,
+    }
 
 
 def create_item(
-    item_code: str, total_price: float, poz_data: dict, logger: logging.Logger
+    item_code: str, total_price: float, poz_data: Dict, logger: logging.Logger
 ):
+    """Create or update Item document"""
     if frappe.db.exists("Item", {"item_code": item_code}):
-        i = frappe.get_doc("Item", {"item_code": item_code})
-        print("--Get Item--")
+        item = frappe.get_doc("Item", {"item_code": item_code})
     else:
-        i = frappe.new_doc("Item")
-        print("--Create Item--")
-    i.item_code = item_code
-    i.item_name = item_code
-    i.item_group = "All Item Groups"
-    i.stock_uom = "Nos"
-    i.valuation_rate = total_price
-    i.description = poz_data.get("ACIKLAMA")
-    i.custom_serial = poz_data.get("SERI")
-    i.custom_width = poz_data.get("GENISLIK")
-    i.custom_height = poz_data.get("YUKSEKLIK")
-    i.custom_color = poz_data.get("RENK")
-    i.custom_quantity = poz_data.get("ADET")
-    i.custom_remarks = poz_data.get("NOTLAR")
-    i.custom_poz_id = poz_data.get("PozID")
-    i.save(ignore_permissions=True)
-    logger.info(f"Created item {item_code}")
-    return i
+        item = frappe.new_doc("Item")
+
+    item.update(
+        {
+            "item_code": item_code,
+            "item_name": item_code,
+            "item_group": "All Item Groups",
+            "stock_uom": "Nos",
+            "valuation_rate": total_price,
+            "description": poz_data.get("ACIKLAMA"),
+            "custom_serial": poz_data.get("SERI"),
+            "custom_width": poz_data.get("GENISLIK"),
+            "custom_height": poz_data.get("YUKSEKLIK"),
+            "custom_color": poz_data.get("RENK"),
+            "custom_quantity": poz_data.get("ADET"),
+            "custom_remarks": poz_data.get("NOTLAR"),
+            "custom_poz_id": poz_data.get("PozID"),
+        }
+    )
+
+    item.save(ignore_permissions=True)
+    logger.info(f"{'Updated' if item.get('name') else 'Created'} item {item_code}")
+    return item
 
 
 def get_tax_account():
-    if not frappe.db.exists(
-        "Account", {"account_name": "ERCOM HESAPLANAN KDV 20", "account_number": "391.99"}
-    ):
+    """Get or create tax account"""
+    account_filters = {
+        "account_name": DEFAULT_TAX_ACCOUNT["name"],
+        "account_number": DEFAULT_TAX_ACCOUNT["number"],
+    }
+
+    if not frappe.db.exists("Account", account_filters):
         company = frappe.get_doc("Company", frappe.defaults.get_user_default("company"))
-        ta = frappe.new_doc("Account")
-        ta.account_name = "ERCOM HESAPLANAN KDV 20"
-        ta.account_number = "391.99"
-        ta.parent_account = f"391 - HESAPLANAN KDV - {company.abbr}"
-        ta.currency = "TRY"
-        ta.account_type = "Tax"
-        ta.tax_rate = 20
-        ta.save(ignore_permissions=True)
-        return ta
-    else:
-        return frappe.get_doc(
-            "Account",
-            {"account_name": "ERCOM HESAPLANAN KDV 20", "account_number": "391.99"},
+        account = frappe.new_doc("Account")
+        account.update(
+            {
+                "account_name": DEFAULT_TAX_ACCOUNT["name"],
+                "account_number": DEFAULT_TAX_ACCOUNT["number"],
+                "parent_account": f"391 - HESAPLANAN KDV - {company.abbr}",
+                "currency": "TRY",
+                "account_type": "Tax",
+                "tax_rate": DEFAULT_TAX_ACCOUNT["tax_rate"],
+            }
         )
+        account.save(ignore_permissions=True)
+        return account
+
+    return frappe.get_doc("Account", account_filters)
 
 
 def get_float_value(value: str) -> float:
+    """Convert string value to float"""
     cleaned_value = (
         value.lower().replace("tl", "").strip().replace(".", "").replace(",", ".")
     )
