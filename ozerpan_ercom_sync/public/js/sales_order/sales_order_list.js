@@ -29,7 +29,7 @@ function uploadXLSFile(listview) {
       primary_action_label: __("Submit"),
       primary_action(values) {
         console.log(values);
-        callUploadBomApi(values);
+        callUploadFileApi(values);
         d.hide();
       },
     });
@@ -37,9 +37,9 @@ function uploadXLSFile(listview) {
   });
 }
 
-function callUploadBomApi(values) {
+function callUploadFileApi(values) {
   frappe.call({
-    method: "ozerpan_ercom_sync.custom_api.sales_order.update_bom",
+    method: "ozerpan_ercom_sync.custom_api.upload_file.upload_file",
     args: {
       file_url: values.file,
     },
