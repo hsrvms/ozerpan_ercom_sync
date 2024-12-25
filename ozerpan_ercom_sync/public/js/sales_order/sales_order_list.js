@@ -39,7 +39,7 @@ function uploadXLSFile(listview) {
 
 function callUploadFileApi(values) {
   frappe.call({
-    method: "ozerpan_ercom_sync.custom_api.upload_file.upload_file",
+    method: "ozerpan_ercom_sync.custom_api.file_upload.upload_file.upload_file",
     args: {
       file_url: values.file,
     },
