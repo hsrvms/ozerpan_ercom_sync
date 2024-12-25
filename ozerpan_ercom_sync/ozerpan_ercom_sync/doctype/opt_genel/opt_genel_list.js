@@ -35,7 +35,7 @@ function uploadOptiGenelListBtn(listview) {
 
 function callUploadOptGenelApi(values) {
   frappe.call({
-    method: "ozerpan_ercom_sync.custom_api.opt_genel.create_opt_genel",
+    method: "ozerpan_ercom_sync.custom_api.file_upload.upload_file.upload_file",
     args: {
       file_url: values.file,
     },
